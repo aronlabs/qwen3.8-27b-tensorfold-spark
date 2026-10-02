@@ -12,10 +12,10 @@
 </p>
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
-**8 concurrent requests**, a **pinned 78 GiB KV pool (2.5M tokens)**, the full **262,144-token context**, DFlash2 speculative decoding, **up to 50 images and video input**. It runs
+**10 concurrent requests**, a **pinned 80 GiB KV pool (2,621,440 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, and **up to 50 images and video input**. It runs
 [TensorFold](https://github.com/ashhart/TensorFold) v0.6.0 (`c464617`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
-cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool). The engine is upstream's.
+cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool).
 
 - Checkpoint: [`Vontra/Qwen3.8-27B-MLX-4bit`](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) (affine 4-bit, groups of 64, ~15 GB)
 - Drafter: [`z-lab/Qwen3.8-27B-DFlash2`](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) (~3.6 GB)
@@ -25,38 +25,58 @@ cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool). 
 
 ## Performance
 
-The official numbers, from [sparkDash](https://github.com/MiaAI-Lab/sparkDash), the benchmark of the MiaAI-Lab Spark
-recipes (one DGX Spark; `agg` is the total across the concurrent requests, `str` the rate of each one, TTFT the time to
-the first token).
+All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/sparkDash) on NVIDIA DGX Spark (GB10, 128 GB unified memory) on 2026-10-02 (`agg` is total across concurrent requests, `str` is per-request throughput, TTFT is time to first token).
 
-**Decode, prose** (tok/s)
+### Decode, Structured (`Count 1 to 200`) (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 58.3 | 58.3 | 100 ms |
-| 2 | 108.5 | 55.4 | 208 ms |
-| 4 | 135.1 | 40.3 | 417 ms |
-| 8 | 220.6 | 32.7 | 870 ms |
+| 1 | 146.9 | 146.9 | 95 ms |
+| 2 | 207.3 | 117.7 | 198 ms |
+| 3 | 227.8 | 100.1 | 293 ms |
+| 4 | 337.4 | 102.0 | 401 ms |
+| 5 | 362.9 | 83.4 | 509 ms |
+| 6 | 390.3 | 75.5 | 606 ms |
+| 8 | 461.7 | 69.2 | 845 ms |
+| **10** | **500.3** | **62.3** | **1.12 s** |
+| 16 | 487.8 | 39.9 | 1.97 s |
 
-**Decode, code** (tok/s)
+### Decode, Code (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 136.9 | 136.9 | 101 ms |
-| 2 | 223.9 | 119.6 | 202 ms |
-| 4 | 292.0 | 89.2 | 427 ms |
-| 8 | 323.2 | 53.3 | 867 ms |
+| 1 | 141.9 | 141.9 | 108 ms |
+| 2 | 223.3 | 120.3 | 213 ms |
+| 3 | 275.8 | 101.8 | 296 ms |
+| 4 | 289.2 | 90.1 | 379 ms |
+| 5 | 318.2 | 81.0 | 509 ms |
+| 6 | 325.1 | 68.2 | 600 ms |
+| 8 | 362.8 | 55.6 | 840 ms |
+| **10** | **375.1** | **48.7** | **1.08 s** |
+| 16 | 388.8 | 32.7 | 1.90 s |
 
-**Prefill** (tok/s)
+### Decode, Prose (tok/s)
 
-| Prompt | Tokens | Prefill speed | Time to first token |
+| Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 8k | 8,231 | 1,793.0 tok/s | 4.59 s |
-| 16k | 16,420 | 1,785.3 tok/s | 9.20 s |
-| 32k | 32,802 | 1,633.3 tok/s | 20.08 s |
-| 64k | 65,576 | 1,415.9 tok/s | 46.31 s |
-| 128k | 131,111 | 1,117.8 tok/s | 117.29 s |
+| 1 | 62.6 | 62.6 | 96 ms |
+| 2 | 104.2 | 53.0 | 199 ms |
+| 3 | 131.9 | 47.3 | 296 ms |
+| 4 | 153.5 | 43.6 | 406 ms |
+| 5 | 183.1 | 40.6 | 504 ms |
+| 6 | 212.5 | 37.8 | 607 ms |
+| 8 | 238.3 | 34.2 | 843 ms |
+| **10** | **263.5** | **30.3** | **1.06 s** |
+| 16 | 290.1 | 20.6 | 1.76 s |
 
+### Prefill (`PREFILL_FP8=1`) (tok/s)
+
+| Prompt Context | Tokens | Prefill speed | Time to first token |
+| ---: | ---: | ---: | ---: |
+| 4k | 4,132 | **1,844.9 tok/s** | 2.24 s |
+| 8k | 8,230 | **1,927.7 tok/s** | 4.27 s |
+| 16k | 16,423 | **1,899.1 tok/s** | 8.65 s |
+| 32k | 32,808 | **1,731.9 tok/s** | 18.94 s |
 Longer prompts, measured here with a needle-in-a-haystack prompt on the default server (window 262,144): 195k tokens in 205 s
 (948 tok/s) and 255,897 tokens in 315 s (812 tok/s). With YaRN: 491k in 924 s and 884k in 2,664 s
 ([guide](#longer-context-with-yarn-a-1m-token-window)).
