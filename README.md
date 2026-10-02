@@ -252,12 +252,12 @@ engine and have no counterpart here. KV-cache quantization is Flash Next only.
 ## Quick start
 
 ```bash
-git clone https://github.com/MiaAI-Lab/Qwen3.8-27B-DGX-Spark-TensorFold.git
-cd Qwen3.8-27B-DGX-Spark-TensorFold
+git clone https://github.com/aronlabs/qwen3.8-27b-tensorfold-spark.git
+cd qwen3.8-27b-tensorfold-spark
 ./start.sh
 ```
 
-The first run pulls the prebuilt image (`ghcr.io/miaai-lab/qwen3.8-27b-dgx-spark-tensorfold:v0.6.0-<patches hash>`, if the
+The first run pulls the prebuilt image (`ghcr.io/miaai-lab/qwen3.8-27b-dgx-spark-tensorfold:v0.6.2-<patches hash>`, if the
 package is reachable with your Docker login; else it builds it locally, a few minutes) and downloads the checkpoints, then
 compiles the CUDA kernels (a few minutes, once).
 Later starts take about a minute. `start.sh` runs a smoke test and prints the endpoint.

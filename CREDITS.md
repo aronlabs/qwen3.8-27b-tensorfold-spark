@@ -19,13 +19,13 @@ This repository is a layer of scripts and patches. Almost everything that makes 
 ## Inference engine
 
 - **[TensorFold](https://github.com/ashhart/TensorFold)** by Ash Hart ([ashhart](https://github.com/ashhart)) and the
-  TensorFold contributors. v0.6.0 is Apache-2.0 (releases through v0.5.0 stay MIT). The engine does all the serving:
+  TensorFold contributors. v0.6.2 is Apache-2.0 (releases through v0.5.0 stay MIT). The engine does all the serving:
   the Qwen3.8 dense CUDA engine (lane matmuls, DeltaNet and attention kernels, FP8 prompt path), DFlash2 draft trees
   and context copies, the concurrent scheduler and memory gate, the OpenAI-compatible server and the Qwen image
-  pipeline. **Every file in `patches/` is a modification of TensorFold v0.6.0** (`c464617`); see `LICENSE`, `NOTICE`
+  pipeline. **Every file in `patches/` is a modification of TensorFold v0.6.2** (`56e2e3e`); see `LICENSE`, `NOTICE`
   and `LICENSES/`.
 - TensorFold itself builds on, and credits in its
-  [third-party notices](https://github.com/ashhart/TensorFold/blob/v0.6.0/THIRD_PARTY_NOTICES.md):
+  [third-party notices](https://github.com/ashhart/TensorFold/blob/v0.6.2/THIRD_PARTY_NOTICES.md):
   [MLX](https://github.com/ml-explore/mlx) and [mlx-lm](https://github.com/ml-explore/mlx-lm) (Apple, MIT),
   [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) (Prince Canuma, MIT),
   [ExLlamaV3](https://github.com/turboderp-org/exllamav3) (turboderp, MIT) and Hugging Face
