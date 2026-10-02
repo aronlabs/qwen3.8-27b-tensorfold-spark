@@ -5,7 +5,7 @@
 # Stop it with ./stop.sh.
 #
 # Usage: ./start.sh [restart] [extra tensorfold serve args]
-#   ./start.sh                         # scripts/config.sh defaults: 8 streams x 262,144 tokens, FP8 prompts, vision
+#   ./start.sh                         # scripts/config.sh defaults: 10 streams x 262,144 tokens, FP8 prompts, vision
 #                                      # (if the server already runs, says so and leaves it alone)
 #   ./start.sh restart                 # stop the running server (./stop.sh), then start it again, e.g. to apply
 #                                      # changed settings; the new arguments are checked before stopping
