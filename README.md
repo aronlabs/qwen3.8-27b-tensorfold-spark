@@ -13,9 +13,9 @@
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
 **10 concurrent requests**, a **pinned 80 GiB KV pool (2,621,440 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, and **up to 50 images and video input**. It runs
-[TensorFold](https://github.com/ashhart/TensorFold) v0.6.0 (`c464617`) in NVIDIA's PyTorch container, plus five patches
+[TensorFold](https://github.com/ashhart/TensorFold) v0.6.2 (`56e2e3e`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
-cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool).
+cache, on by default; `0004`: a memory reserve of 0; `0005`: an 80 GiB pinned KV pool and 8-slot prompt prefix cache).
 
 - Checkpoint: [`Vontra/Qwen3.8-27B-MLX-4bit`](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) (affine 4-bit, groups of 64, ~15 GB)
 - Drafter: [`z-lab/Qwen3.8-27B-DFlash2`](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) (~3.6 GB)
@@ -31,52 +31,44 @@ All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/spark
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 146.9 | 146.9 | 95 ms |
-| 2 | 207.3 | 117.7 | 198 ms |
-| 3 | 227.8 | 100.1 | 293 ms |
-| 4 | 337.4 | 102.0 | 401 ms |
-| 5 | 362.9 | 83.4 | 509 ms |
-| 6 | 390.3 | 75.5 | 606 ms |
-| 8 | 461.7 | 69.2 | 845 ms |
-| **10** | **500.3** | **62.3** | **1.12 s** |
-| 16 | 487.8 | 39.9 | 1.97 s |
+| 1 | 154.1 | 154.1 | 93 ms |
+| 2 | 263.0 | 138.0 | 118 ms |
+| 4 | 305.0 | 116.0 | 169 ms |
+| 6 | 515.0 | 89.0 | 219 ms |
+| 8 | 651.0 | 84.0 | 307 ms |
+| **10** | **695.1** | **71.0** | **354 ms** |
 
 ### Decode, Code (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 141.9 | 141.9 | 108 ms |
-| 2 | 223.3 | 120.3 | 213 ms |
-| 3 | 275.8 | 101.8 | 296 ms |
-| 4 | 289.2 | 90.1 | 379 ms |
-| 5 | 318.2 | 81.0 | 509 ms |
-| 6 | 325.1 | 68.2 | 600 ms |
-| 8 | 362.8 | 55.6 | 840 ms |
-| **10** | **375.1** | **48.7** | **1.08 s** |
-| 16 | 388.8 | 32.7 | 1.90 s |
+| 1 | 143.0 | 143.0 | 115 ms |
+| 2 | 253.0 | 129.0 | 115 ms |
+| 4 | 345.0 | 102.0 | 171 ms |
+| 6 | 386.0 | 79.0 | 192 ms |
+| 8 | 496.0 | 67.0 | 302 ms |
+| **10** | **472.0** | **59.0** | **365 ms** |
 
 ### Decode, Prose (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 62.6 | 62.6 | 96 ms |
-| 2 | 104.2 | 53.0 | 199 ms |
-| 3 | 131.9 | 47.3 | 296 ms |
-| 4 | 153.5 | 43.6 | 406 ms |
-| 5 | 183.1 | 40.6 | 504 ms |
-| 6 | 212.5 | 37.8 | 607 ms |
-| 8 | 238.3 | 34.2 | 843 ms |
-| **10** | **263.5** | **30.3** | **1.06 s** |
-| 16 | 290.1 | 20.6 | 1.76 s |
+| 1 | 62.0 | 62.0 | 95 ms |
+| 2 | 117.0 | 59.0 | 122 ms |
+| 4 | 148.0 | 43.0 | 177 ms |
+| 6 | 239.0 | 42.0 | 273 ms |
+| 8 | 260.0 | 36.0 | 306 ms |
+| **10** | **302.0** | **32.0** | **362 ms** |
 
 ### Prefill (`PREFILL_FP8=1`) (tok/s)
 
 | Prompt Context | Tokens | Prefill speed | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 4k | 4,132 | **1,844.9 tok/s** | 2.24 s |
-| 8k | 8,230 | **1,927.7 tok/s** | 4.27 s |
-| 16k | 16,423 | **1,899.1 tok/s** | 8.65 s |
-| 32k | 32,808 | **1,731.9 tok/s** | 18.94 s |
+| 1k | 854 | **1,654.0 tok/s** | 0.52 s |
+| 4k | 4,038 | **1,954.6 tok/s** | 2.07 s |
+| 8k | 8,038 | **1,965.1 tok/s** | 4.09 s |
+| 16k | 16,041 | **1,910.7 tok/s** | 8.40 s |
+| 50k | 50,337 | **1,626.0 tok/s** | 31.04 s |
 Longer prompts, measured here with a needle-in-a-haystack prompt on the default server (window 262,144): 195k tokens in 205 s
 (948 tok/s) and 255,897 tokens in 315 s (812 tok/s). With YaRN: 491k in 924 s and 884k in 2,664 s
 ([guide](#longer-context-with-yarn-a-1m-token-window)).
@@ -304,7 +296,7 @@ Every setting is in [`scripts/config.sh`](scripts/config.sh); override from the 
 | `TENSORFOLD_VIDEO_TOKENS` | `16384` | a request's video token budget |
 | `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `0.95` / `20` | default sampling (Qwen's thinking-mode values) |
 | `THINKING` | `1` | open a think block by default |
-| `CHECKPOINT_SLOTS` | unset | retained prompt-end states for prefix reuse (TensorFold default) |
+| `CHECKPOINT_SLOTS` | `8` | retained prompt-end states for prefix reuse |
 | `MODEL_ID` / `DRAFT_ID` | MLX 4-bit / DFlash2 | other checkpoint; `DRAFT_ID=` serves without drafts |
 | `SERVED_NAME`, `PORT`, `HOST`, `CONTAINER_NAME`, `IMAGE` | see file | |
 | `TENSORFOLD_MEMORY_RESERVE_GIB` | `0` | GiB left out of MemAvailable at admission and kept free by the stream memory gate (patch 0004 allows 0; TensorFold's own default is a tenth of RAM, its floor 2). On this machine's unified memory, running out can freeze the host: raise it if other workloads share the box |
@@ -329,7 +321,7 @@ LICENSE, NOTICE, LICENSES/, CREDITS.md   Apache-2.0 license, notices of the MIT 
 
 ## License
 
-Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The patches modify TensorFold v0.6.0, which is
+Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The patches modify TensorFold v0.6.2, which is
 Apache-2.0. Parts of the scripts and tools are adapted from MiaAI-Lab's MIT-licensed Flash Next recipe and keep its
 notice ([`LICENSES/MIT-MiaAI-Lab.txt`](LICENSES/MIT-MiaAI-Lab.txt)); TensorFold's pre-0.6.0 MIT notice is in
 `LICENSES/` too. The model weights, downloaded from Hugging Face and not part of this repository, are under the Qwen
@@ -339,7 +331,7 @@ It also contains Hugging Face `transformers` (Apache 2.0) and PyAV (BSD) with it
 
 ## Credits
 
-Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart (v0.6.0), [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
+Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart (v0.6.2), [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 by Qwen, [Vontra's MLX 4-bit checkpoint](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) and
 [z-lab's DFlash2 drafter](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2), with the launcher, tools and the video code
 adapted from MiaAI-Lab's Flash Next recipe. The full list, including the YaRN source, the runtime stack and licenses,

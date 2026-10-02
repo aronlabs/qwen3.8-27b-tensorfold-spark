@@ -1,19 +1,12 @@
-Qwen3.8-27B on TensorFold v0.6.0 (c464617): TENSORFOLD_MEMORY_RESERVE_GIB may be 0 (the stock floor is 2 GiB), and the
-stream memory gate of the dense 27B decoder reads the same variable instead of a fixed 2 GiB. With 0 the budget is all of
-MemAvailable (reclaimable page cache included). Applies after 0003.
+Qwen3.8-27B on TensorFold v0.6.2 (56e2e3e): allow TENSORFOLD_MEMORY_RESERVE_GIB=0 (the server default is 2).
+Setting it to 0 leaves nothing out of MemAvailable at startup admission, so a pinned cache pool or stream memory gate
+can take all available memory without startup refusal. Applies after 0003.
 
+diff --git tensorfold/cuda/capacity.py tensorfold/cuda/capacity.py
+index 8bb309b..3c95eff 100644
 --- tensorfold/cuda/capacity.py
 +++ tensorfold/cuda/capacity.py
-@@ -157,7 +157,7 @@
- 
- 
- def reserve_bytes(total: int, *, host: bool = False) -> int:
--    """What the startup budget leaves free: max(4 GiB, a tenth of ``total``), or TENSORFOLD_MEMORY_RESERVE_GIB (>= 2)."""
-+    """What the startup budget leaves free: max(4 GiB, a tenth of ``total``), or TENSORFOLD_MEMORY_RESERVE_GIB (>= 0; the stock floor was 2)."""
- 
-     value = os.environ.get("TENSORFOLD_MEMORY_RESERVE_GIB", "").strip()
-     if not value:
-@@ -166,8 +166,8 @@
+@@ -166,8 +166,8 @@ def reserve_bytes(total: int, *, host: bool = False) -> int:
          gib = float(value)
      except ValueError:
          gib = math.nan
@@ -24,6 +17,8 @@ MemAvailable (reclaimable page cache included). Applies after 0003.
      return int(gib * GIB)
  
  
+diff --git tensorfold/families/qwen3_5/cuda/multi.py tensorfold/families/qwen3_5/cuda/multi.py
+index 28f777b..916e21a 100644
 --- tensorfold/families/qwen3_5/cuda/multi.py
 +++ tensorfold/families/qwen3_5/cuda/multi.py
 @@ -2,6 +2,7 @@
@@ -34,13 +29,14 @@ MemAvailable (reclaimable page cache included). Applies after 0003.
  import time
  
  import torch
-@@ -105,7 +106,8 @@
- 
-         self.layer_bytes = 2 * getattr(c, "kv_heads", 0) * getattr(c, "head_dim", 0) * kv_fp8.itemsize()   # a row of one layer
+@@ -122,7 +123,9 @@ class MultiDecoder:
+         c, att = w.config, sum(1 for layer in getattr(w, "layers", ()) if not layer.linear)
+         self.layer_bytes = 2 * getattr(c, "kv_heads", 0) * getattr(c, "head_dim", 0) * kv_fp8.itemsize()
          self.row_bytes = att * self.layer_bytes
 -        self.memory_gate = (MemoryGate(1 << 62, reserve=2 * GIB, live=torch_live(torch, available_bytes))
-+        self.memory_gate = (MemoryGate(1 << 62, reserve=int(float(os.environ.get("TENSORFOLD_MEMORY_RESERVE_GIB") or 2) * GIB),
-+                                   live=torch_live(torch, available_bytes))
-                      if world == 1 and torch.cuda.is_available() else None)
++        reserve = 2 * GIB if os.environ.get("TENSORFOLD_MEMORY_RESERVE_GIB") is None else \
++            int(float(os.environ.get("TENSORFOLD_MEMORY_RESERVE_GIB", 0)) * GIB)
++        self.memory_gate = (MemoryGate(1 << 62, reserve=reserve, live=torch_live(torch, available_bytes))
+                      if world == 1 and cuda else None)
  
      def live(self) -> int:

@@ -17,9 +17,9 @@ fi
 # The target and its DFlash2 drafter (CUDA serves the 27B with DFlash2 unless --no-drafts is given).
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-27B-MLX-4bit}"           # MLX affine 4-bit, groups of 64 (~15 GB)
 DRAFT_ID="${DRAFT_ID:-z-lab/Qwen3.8-27B-DFlash2}"             # the drafter (~3.6 GB); "" serves without drafts
-# The patches (if any) and start.sh's flags are made for TensorFold v0.6.0 exactly (c464617). After changing
+# The patches (if any) and start.sh's flags are made for TensorFold v0.6.2 (56e2e3e). After changing
 # TF_VERSION, TF_REPO or BASE_IMAGE, run `scripts/prepare.sh --rebuild`.
-TF_VERSION="${TF_VERSION:-v0.6.0}"
+TF_VERSION="${TF_VERSION:-v0.6.2}"
 TF_REPO="${TF_REPO:-https://github.com/ashhart/TensorFold.git}"
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
 IMAGE="${IMAGE:-tensorfold-qwen38-27b:${TF_VERSION}}"          # the local image prepare.sh builds
@@ -56,7 +56,7 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-0.95}"
 TOP_K="${TOP_K:-20}"
 THINKING="${THINKING:-1}"
-CHECKPOINT_SLOTS="${CHECKPOINT_SLOTS:-}"   # retained prompt-end states (tensorfold --checkpoint-slots); empty: default
+CHECKPOINT_SLOTS="${CHECKPOINT_SLOTS:-8}"   # retained prompt-end states (tensorfold --checkpoint-slots); default: 8
 
 # Images and video (patches/0001): images a request may carry and the visual tokens they share (each image at most
 # 4,096; 50 images get ~327 each), and a request's video token budget (2 frames a second, at most 256 frames).
