@@ -39,6 +39,8 @@ if [[ "$PREFILL_FP8" == 1 ]]; then SERVE_ARGS+=(--prefill-fp8); else SERVE_ARGS+
 [[ -n "$CHECKPOINT_SLOTS" ]] && SERVE_ARGS+=(--checkpoint-slots "$CHECKPOINT_SLOTS")
 [[ "$VISION" == 1 ]] && SERVE_ARGS+=(--vision)
 [[ "$VISION" == 1 && "$VISION_URLS" == 1 ]] && SERVE_ARGS+=(--vision-urls)
+# 0.6.3 replaced the TENSORFOLD_MAX_IMAGES / TENSORFOLD_IMAGE_TOKENS env knobs with these flags (defaults: 4 images, 4,096 tokens)
+[[ "$VISION" == 1 ]] && SERVE_ARGS+=(--vision-max-images "$VISION_MAX_IMAGES" --vision-image-tokens "$VISION_IMAGE_TOKENS")
 if [[ "$THINKING" == 1 ]]; then SERVE_ARGS+=(--thinking); else SERVE_ARGS+=(--no-thinking); fi
 SERVE_ARGS+=("$@")
 # The effective value of a flag (its last occurrence, as --flag value or --flag=value).

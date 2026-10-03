@@ -1,15 +1,15 @@
-Qwen3.8-27B on TensorFold v0.6.2 (56e2e3e): a pinned attention-cache pool for the concurrent decoder (one GPU).
+Qwen3.8-27B on TensorFold v0.6.3 (9356df5): a pinned attention-cache pool for the concurrent decoder (one GPU).
 TENSORFOLD_KV_POOL_GIB=80 reserves that much cache memory once startup is done (one block, touched so its pages are real,
 freed into torch's allocator and never released: the decoder's cache-trimming calls become no-ops). The streams' caches and
 the kept prompt states grow inside it; the memory gate counts what torch holds beyond the weights and fixed buffers
 against the pool instead of asking the host's free memory. The startup estimate counts the pool instead of caches that grow.
 Unset, nothing changes. Applies after 0004.
 
+
 diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
-index 7fcbbd1..2dc392b 100644
 --- tensorfold/cuda/geometry.py
 +++ tensorfold/cuda/geometry.py
-@@ -381,7 +381,7 @@ def _gdn_dims(t: dict, world: int) -> tuple:
+@@ -394,7 +394,7 @@
  
  
  def stream_geometry(t: dict, world: int, streams: int, keep: int, *, first: int | None = None,
@@ -18,7 +18,7 @@ index 7fcbbd1..2dc392b 100644
      """The 27B's concurrent decoder: live streams, ``keep`` kept prompt ends, windows; ``first``: growth on one GPU."""
  
      linear, attention = layer_counts(t)
-@@ -398,6 +398,8 @@ def stream_geometry(t: dict, world: int, streams: int, keep: int, *, first: int
+@@ -411,6 +411,8 @@
          kv = attention * capacity * hk * hd * 2 * kv_item
          caches = (streams + keep + 1) * kv if first is None else \
              kv + (streams + keep) * attention * min(first, capacity) * hk * hd * 2 * kv_item
@@ -27,11 +27,11 @@ index 7fcbbd1..2dc392b 100644
          scratch = rows * h * (hd + 2) * ((capacity + 511) // 512) * 4
          if kv_item == 1:
              scratch += 2 * capacity * hk * hd * 2
+
 diff --git tensorfold/cuda/kv_fp8.py tensorfold/cuda/kv_fp8.py
-index d1d6f9f..d6610d9 100644
 --- tensorfold/cuda/kv_fp8.py
 +++ tensorfold/cuda/kv_fp8.py
-@@ -20,3 +20,17 @@ def round(tensor: torch.Tensor) -> torch.Tensor:
+@@ -20,3 +20,17 @@
  def dense(cache: torch.Tensor, rows: int) -> torch.Tensor:
      """The prompt-attention kernel reads bf16: widen cache rows to bf16 for this layer."""
      return cache[:rows] if cache.dtype == torch.bfloat16 else cache[:rows].to(torch.bfloat16)
@@ -49,12 +49,12 @@ index d1d6f9f..d6610d9 100644
 +    if not gib >= 0:
 +        raise ValueError(f"TENSORFOLD_KV_POOL_GIB={value}: a number of GiB, 0 or more")
 +    return int(gib * 1024**3)
+
 diff --git tensorfold/cuda/memory_gate.py tensorfold/cuda/memory_gate.py
-index 3bb0d6f..b3c9b91 100644
 --- tensorfold/cuda/memory_gate.py
 +++ tensorfold/cuda/memory_gate.py
-@@ -37,4 +37,16 @@ def torch_live(torch, available: Callable) -> Callable[[], int]:
-     return lambda: int(available(torch)) + int(torch.cuda.memory_reserved()) - int(torch.cuda.memory_allocated())
+@@ -45,4 +45,16 @@
+     return room
  
  
 -__all__ = ["MemoryGate", "NoRoom", "torch_live"]
@@ -71,11 +71,11 @@ index 3bb0d6f..b3c9b91 100644
 +
 +
 +__all__ = ["MemoryGate", "NoRoom", "PoolGate", "torch_live"]
+
 diff --git tensorfold/families/qwen3_5/cuda/engine.py tensorfold/families/qwen3_5/cuda/engine.py
-index c7d6b0c..de2bdc9 100644
 --- tensorfold/families/qwen3_5/cuda/engine.py
 +++ tensorfold/families/qwen3_5/cuda/engine.py
-@@ -87,8 +87,9 @@ class Qwen27Engine:
+@@ -88,8 +88,9 @@
          # prompt chunks sized to the card (4096 rows from 80 GB), the verify scratch to the rows a round takes
          chunk = prompt_rows(total_bytes(torch), prompt_row_bytes(config(model_dir), tp))
          item = kv_fp8.itemsize()
@@ -86,7 +86,7 @@ index c7d6b0c..de2bdc9 100644
                      else (lambda text: gdn_geometry(text, tp, max_rows, rows=max_rows, prompt=chunk, evicts=tp == 1,
                                                     kv_item=item)))
          # an affine checkpoint's packed words at their stored precision; an EXL3 pack's by its own format
-@@ -156,11 +157,15 @@ class Qwen27Engine:
+@@ -158,11 +159,15 @@
                                        vision=self.vision)
              self.multi.model_dir = self.model_dir             # rank 1 compiles a request's grammar from it
              self.multi.calibrate(streams)
@@ -103,11 +103,11 @@ index c7d6b0c..de2bdc9 100644
                  curve = ", ".join(f"{r}: {ms:.1f}" for r, ms in self.multi.costs)
                  print(f"[tensorfold] verify ms by rows (tree widths follow it): {curve}", flush=True)
                  self.scheduler = Scheduler(self.multi, max_streams=streams)
+
 diff --git tensorfold/families/qwen3_5/cuda/multi.py tensorfold/families/qwen3_5/cuda/multi.py
-index 916e21a..38f5125 100644
 --- tensorfold/families/qwen3_5/cuda/multi.py
 +++ tensorfold/families/qwen3_5/cuda/multi.py
-@@ -9,7 +9,7 @@ import torch
+@@ -9,7 +9,7 @@
  
  from tensorfold.cuda.capacity import available_bytes
  from tensorfold.cuda.markers import MIN_GAP
@@ -116,7 +116,7 @@ index 916e21a..38f5125 100644
  from tensorfold.cuda.sampling import sample_streams
  from tensorfold.cuda.streams import PrefixCache, Stream, accept, next_fill
  from tensorfold.engine.grammar import GrammarError, pack
-@@ -91,6 +91,7 @@ class MultiDecoder:
+@@ -91,6 +91,7 @@
      """The ``Scheduler``'s decoder on one GPU or as ``rank`` of two; a stream's window holds at most 16 rows."""
  
      memory_gate: MemoryGate | None = None     # one GPU: streams' caches grow by use (two ranks reserve up front)
@@ -124,7 +124,7 @@ index 916e21a..38f5125 100644
      block: int = 16                           # rows of the drafter's next block with several streams (pending, masks)
      depth: bool = True                        # whether the block follows the trees here (DEPTH_CHIPS)
      spent: dict | None = None                 # streams -> the last rounds' ms beside the forward
-@@ -131,6 +132,19 @@ class MultiDecoder:
+@@ -131,6 +132,19 @@
      def live(self) -> int:
          return len(self.streams) + len(self.filling)
  
@@ -144,7 +144,7 @@ index 916e21a..38f5125 100644
      def _send(self, values: list[int]) -> None:
          if self.world == 2 and self.broken is None:
              _share(values, 0, self.device)
-@@ -203,7 +217,7 @@ class MultiDecoder:
+@@ -203,7 +217,7 @@
                  if not self.live():
                      return                          # alone: startup fitted one stream's whole window
                  raise NoRoom(f"a {len(s.prompt)}-token prompt waits for memory until a live stream finishes")
@@ -153,7 +153,7 @@ index 916e21a..38f5125 100644
  
      def _grow(self, st: State, have: int, size: int, alone: bool) -> bool:
          """Grow ``st``'s caches from ``have`` to ``size`` rows while the gate has room (a layer's copy at a time)."""
-@@ -213,9 +227,9 @@ class MultiDecoder:
+@@ -213,9 +227,9 @@
                  if alone:
                      break                           # startup fitted one stream's whole window
                  return False
@@ -165,7 +165,7 @@ index 916e21a..38f5125 100644
          return True
  
      def _make_room(self, live: list[Stream]) -> list[Stream]:
-@@ -242,7 +256,7 @@ class MultiDecoder:
+@@ -242,7 +256,7 @@
              self.memory_gate.ends += 1
              self.streams.pop(newest.sid, None)
              newest.st = None                         # its caches go now (a cached prompt end may still view them)
@@ -174,3 +174,4 @@ index 916e21a..38f5125 100644
              return [newest, *self._make_room(live[:-1])]
          self.memory_gate.waits += any(s.waiting for s in live)
          return []
+

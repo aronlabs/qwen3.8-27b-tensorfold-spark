@@ -1,464 +1,63 @@
-Qwen3.8-27B on TensorFold v0.6.2 (56e2e3e): up to 50 images a request (TENSORFOLD_MAX_IMAGES, TENSORFOLD_IMAGE_TOKENS)
+Qwen3.8-27B on TensorFold v0.6.3 (9356df5): up to 50 images a request (--vision-max-images 50 --vision-image-tokens 16384; the totals scale with the count)
 and video input (video_url parts; MP4, WebM, MOV, MKV via PyAV). The image tower takes a request's images in groups of
 16,384 patches, 96 MiB request bodies. The video code (vision/videos.py, the timestamped frame-group prompt, frame
 encoding) is ported to the qwen3_5 frontend.
 
+
 diff --git tensorfold/cuda/http.py tensorfold/cuda/http.py
-index de0ea85..6c29771 100644
 --- tensorfold/cuda/http.py
 +++ tensorfold/cuda/http.py
-@@ -116,9 +116,9 @@ def make_handler(app: App):
+@@ -115,7 +115,7 @@
+                 self._discard_body()
                  return self._json(404, {"error": "not found"})
              try:
-                 length = int(self.headers.get("Content-Length", 0))
--                if not 0 <= length <= 32 * 1024**2:
-+                if not 0 <= length <= 96 * 1024**2:
-                     self.close_connection = True             # the unread body must not reach the next request
--                    return self._json(400, {"error": {"message": "request body exceeds the 32 MiB limit",
-+                    return self._json(400, {"error": {"message": "request body exceeds the 96 MiB limit",
-                                                       "type": "invalid_request_error"}})
-                 body = json.loads(self.rfile.read(length) or b"{}")
+-                body = json.loads(read_body(self) or b"{}")
++                body = json.loads(read_body(self, limit=96 * 1024**2) or b"{}")
+             except RequestError as exc:
+                 return self._json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
              except (json.JSONDecodeError, UnicodeDecodeError):
-diff --git tensorfold/server/messages.py tensorfold/server/messages.py
-index 24bbd82..dde2b67 100644
---- tensorfold/server/messages.py
-+++ tensorfold/server/messages.py
-@@ -28,6 +28,9 @@ def late_system_role(render: Callable[[list[dict[str, Any]]], Any]) -> str:
-         return "user"
- 
- 
-+_VISUAL = ("image_url", "image", "video_url", "video")      # a video part reaches here only where videos are on
-+
-+
- def normalize_messages(messages: list[dict[str, Any]], *, late_system: str = "system",
-                        allow_images: bool = False) -> list[dict[str, Any]]:
-     """Merge leading instructions as system text and retain later instructions as ``late_system`` so earlier conversation tokens stay unchanged."""
-@@ -45,12 +48,12 @@ def normalize_messages(messages: list[dict[str, Any]], *, late_system: str = "sy
-             raise RequestError("this server accepts text only; image, audio and video inputs are unsupported")
-         content = message.get("content")
-         if isinstance(content, list) and allow_images and any(
--                isinstance(p, dict) and p.get("type") in ("image_url", "image") for p in content):
-+                isinstance(p, dict) and p.get("type") in _VISUAL for p in content):
-             if role != "user":
--                raise RequestError("images are supported only in user messages")
-+                raise RequestError("images and videos are supported only in user messages")
-             for part in content:
--                if not isinstance(part, dict) or part.get("type") not in ("text", "image_url", "image"):
--                    raise RequestError("image messages may contain text and image_url parts only")
-+                if not isinstance(part, dict) or part.get("type") not in ("text", *_VISUAL):
-+                    raise RequestError("image messages may contain text and image_url (or video_url) parts only")
-                 if part["type"] == "text" and not isinstance(part.get("text"), str):
-                     raise RequestError("a text content part must contain a text string")
-             out.append({**message, "content": list(content)})
-diff --git tensorfold/server/prompts.py tensorfold/server/prompts.py
-index 3066ce5..c4d04f2 100644
---- tensorfold/server/prompts.py
-+++ tensorfold/server/prompts.py
-@@ -19,7 +19,7 @@ class RenderedPrompt:
- 
- def has_images(messages):
-     return any(isinstance(m, dict) and isinstance(m.get('content'), list)
--               and any(isinstance(p, dict) and p.get('type') == 'image_url' for p in m['content'])
-+               and any(isinstance(p, dict) and p.get('type') in ('image_url', 'video_url') for p in m['content'])
-                for m in messages or [])
- 
- 
-@@ -40,20 +40,37 @@ def image_slot():
-     return IMAGE_SLOTS
- 
- 
-+def _image_tokens() -> int:
-+    import os
-+    return int(os.environ.get("TENSORFOLD_IMAGE_TOKENS") or 16384)
-+
-+
- def prepare_images(frontend, messages, render, *, context_limit=None, limits: ImageLimits = DEFAULT_LIMITS):
-     from tensorfold.vision.images import ImageInputError, load_images, split_images
- 
-     if frontend is None:
-         raise RequestError('image input requires a supported vision checkpoint served with --vision')
-     allow_urls = bool(getattr(frontend, 'allow_urls', False))
-+    videos = bool(getattr(frontend, 'videos', False))       # a frontend that encodes video frames too
-     try:
--        template, sources = split_images(messages, limits=limits, allow_urls=allow_urls)
-+        template, sources = split_images(messages, limits=limits, allow_urls=allow_urls, allow_videos=videos)
-     except (ImageInputError, ValueError) as exc:
-         raise RequestError(str(exc)) from exc
-     slot = image_slot()
-     try:
--        images = load_images(sources, limits=limits, allow_urls=allow_urls)
--        prepared = frontend.prepare(render(template), images, max_prompt_tokens=context_limit)
-+        from tensorfold.vision.images import ImageSource
-+
-+        images = load_images([s for s in sources if isinstance(s, ImageSource)], limits=limits, allow_urls=allow_urls)
-+        clips = [s for s in sources if not isinstance(s, ImageSource)]
-+        if clips:
-+            from tensorfold.vision.videos import load_videos
-+
-+            clips = load_videos(clips, frontend.video_size, allow_urls=allow_urls)
-+            prepared = frontend.prepare(render(template), images, videos=clips, max_visual_tokens=_image_tokens(),
-+                                         max_prompt_tokens=context_limit)
-+        else:
-+            prepared = frontend.prepare(render(template), images, max_visual_tokens=_image_tokens(),
-+                                        max_prompt_tokens=context_limit)
-     except (ImageInputError, ValueError, ImportError) as exc:
-         raise RequestError(str(exc)) from exc
-     finally:
-diff --git tensorfold/vision/images.py tensorfold/vision/images.py
-index 0c716cc..fe6b9aa 100644
---- tensorfold/vision/images.py
-+++ tensorfold/vision/images.py
-@@ -44,7 +44,17 @@ class ImageLimits:
-                 raise ValueError(f"{name} must be an integer")
- 
- 
--DEFAULT_LIMITS = ImageLimits()
-+def _env_limits() -> ImageLimits:
-+    import os
-+    count = int(os.environ.get("TENSORFOLD_MAX_IMAGES") or 50)
-+    if not 1 <= count <= 128:
-+        raise ValueError(f"TENSORFOLD_MAX_IMAGES: 1 to 128 images, not {count}")
-+    return ImageLimits(max_images=count, max_total_encoded_bytes=64 * 1024 * 1024,
-+                       max_total_pixels=max(32 * 1024 * 1024, count * 8 * 1024 * 1024),
-+                       total_timeout_seconds=60.0)
-+
-+
-+DEFAULT_LIMITS = _env_limits()
- 
- 
- def _count_error(limits: ImageLimits) -> ImageInputError:
-@@ -120,8 +130,8 @@ def _check_source(source: ImageSource, limits: ImageLimits, allow_urls: bool = F
-         raise ImageInputError("image URL is too long")
- 
- 
--def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAULT_LIMITS, allow_urls: bool = False
--                 ) -> tuple[list[dict[str, Any]], list[ImageSource]]:
-+def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAULT_LIMITS, allow_urls: bool = False,
-+                 allow_videos: bool = False) -> tuple[list[dict[str, Any]], list[Any]]:
-     """Preserve ordered parts, replacing user image URLs with processor image markers."""
-     if not isinstance(messages, list) or not messages:
-         raise ImageInputError("messages must be a non-empty list")
-@@ -149,18 +159,32 @@ def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAUL
-                 if not isinstance(part.get("text"), str) or any(part.get(key) for key in _MEDIA):
-                     raise ImageInputError("text parts must contain a text string without media")
-                 parts.append(dict(part))
-+            elif kind == "video_url" and allow_videos:
-+                from .videos import DEFAULT_VIDEO_LIMITS, video_source
-+
-+                if role != "user":
-+                    raise ImageInputError("video_url parts are supported only in user messages")
-+                if any(part.get(key) for key in _MEDIA - {"video_url"}):
-+                    raise ImageInputError("video_url parts cannot contain other media")
-+                videos = sum(type(s).__name__ == "VideoSource" for s in sources)
-+                if videos >= DEFAULT_VIDEO_LIMITS.max_videos:
-+                    raise ImageInputError(f"a request supports at most {DEFAULT_VIDEO_LIMITS.max_videos} videos")
-+                sources.append(video_source(part.get("video_url"), DEFAULT_VIDEO_LIMITS, allow_urls))
-+                parts.append({"type": "video"})
-             elif kind == "image_url":
-                 if role != "user":
-                     raise ImageInputError("image_url parts are supported only in user messages")
-                 if any(part.get(key) for key in _MEDIA - {"image_url"}):
-                     raise ImageInputError("image_url parts cannot contain other media")
--                if len(sources) >= limits.max_images:
-+                if sum(isinstance(s, ImageSource) for s in sources) >= limits.max_images:
-                     raise _count_error(limits)
-                 source = _source(part.get("image_url"), limits, allow_urls)
-                 sources.append(source)
-                 parts.append({"type": "image", "detail": source.detail})
-             else:
--                raise ImageInputError("content parts must be text or image_url; audio and video are unsupported")
-+                raise ImageInputError("content parts must be text, image_url or video_url; audio is unsupported"
-+                                      if allow_videos else
-+                                      "content parts must be text or image_url; audio and video are unsupported")
-         output.append({**message, "content": parts})
-     return output, sources
- 
-diff --git tensorfold/vision/images_http.py tensorfold/vision/images_http.py
-index 16d6627..f354aea 100644
---- tensorfold/vision/images_http.py
-+++ tensorfold/vision/images_http.py
-@@ -109,7 +109,7 @@ def _close_socket(sock: socket.socket) -> None:
- 
- 
- def _request(host: str, port: int, target: str, addresses: list[tuple],
--             max_bytes: int, deadline: float) -> tuple[bytes | None, str | None, str | None]:
-+             max_bytes: int, deadline: float, media_types=MEDIA_TYPES) -> tuple[bytes | None, str | None, str | None]:
-     """A watchdog bounds slow headers and TLS handshakes, not just individual reads."""
-     timeout = _remaining(deadline)
-     family, kind, protocol, _, address = addresses[0]
-@@ -128,7 +128,7 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
-         sock.settimeout(_remaining(deadline))
-         sock.do_handshake()
-         connection.sock = sock
--        connection.request("GET", target, headers={"Accept": ", ".join(MEDIA_TYPES), "Accept-Encoding": "identity",
-+        connection.request("GET", target, headers={"Accept": ", ".join(media_types), "Accept-Encoding": "identity",
-                                                    "User-Agent": f"TensorFold/{__version__}"})
-         response = connection.getresponse()
-         _remaining(deadline)
-@@ -142,8 +142,9 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
-         if response.getheader("Content-Encoding", "identity").lower() != "identity":
-             raise ImageInputError("compressed HTTP image responses are unsupported")
-         media = response.getheader("Content-Type", "").split(";", 1)[0].strip().lower()
--        if media not in MEDIA_TYPES:
--            raise ImageInputError("image URL content type must be JPEG, PNG or WebP")
-+        if media not in media_types:
-+            raise ImageInputError("image URL content type must be JPEG, PNG or WebP" if media_types is MEDIA_TYPES
-+                                  else f"media URL content type must be one of {', '.join(media_types)}")
-         length = response.getheader("Content-Length")
-         if length is not None:
-             if not length.isascii() or not length.isdecimal() or int(length) > max_bytes:
-@@ -166,13 +167,13 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
- 
- 
- def fetch_image(url: str, *, max_bytes: int, deadline: float, max_redirects: int,
--                max_url_chars: int) -> tuple[bytes, str]:
-+                max_url_chars: int, media_types=MEDIA_TYPES) -> tuple[bytes, str]:
-     """Resolve and validate each redirect, then connect directly to its checked address."""
-     try:
-         for redirect in range(max_redirects + 1):
-             host, port, target = _url(url, max_url_chars)
-             addresses = _resolve(host, port, deadline)
--            data, location, media = _request(host, port, target, addresses, max_bytes, deadline)
-+            data, location, media = _request(host, port, target, addresses, max_bytes, deadline, media_types)
-             if location is None:
-                 return data, media
-             if redirect == max_redirects:
+
 diff --git tensorfold/vision/qwen_cuda.py tensorfold/vision/qwen_cuda.py
-index 33f51fc..0525584 100644
 --- tensorfold/vision/qwen_cuda.py
 +++ tensorfold/vision/qwen_cuda.py
-@@ -9,7 +9,9 @@ import os
- from pathlib import Path
- from typing import Any
- 
--MAX_PATCHES = 16384
-+MAX_PATCHES = 16384                  # one tower call (a 4,096-token image), and a video call's patches
-+MAX_IMAGE_PATCHES = 4 * 16384        # a request's image patches (16,384 tokens), encoded MAX_PATCHES at a time
-+MAX_VIDEO_PATCHES = 16 * 16384       # a request's video patches (~65k tokens), encoded MAX_PATCHES at a time
- WORKSPACE_BYTES = 4 * 1024**3
- 
- 
-@@ -154,6 +156,9 @@ class QwenCudaVision:
-         self.frontend = QwenImageProcessor.from_directory(model_dir)
+@@ -167,7 +167,7 @@
          raw = json.loads((Path(model_dir) / "config.json").read_text())
          self.image_token = int(raw["image_token_id"])
-+        # videos: Flash Next's frontend (the frame groups ride the image path; tested on that checkpoint)
-+        self.videos = "video_token_id" in raw
-+        self.media_tokens = frozenset({self.image_token} | ({int(raw["video_token_id"])} if self.videos else set()))
+         # videos: Flash Next's frontend (the frame groups ride the image path; tested on that checkpoint)
+-        self.videos = raw.get("model_type") == "qwen4_exp" and "video_token_id" in raw
++        self.videos = "video_token_id" in raw        # 0001: dense Qwen included (0.6.3 upstream: Flash Next only)
+         self.media_tokens = frozenset({self.image_token} | ({int(raw["video_token_id"])} if self.videos else set()))
          self.device = device
          config = Qwen3_5VisionConfig(**{k: v for k, v in self.config.items()
-                                       if k not in ("model_type", "deepstack_visual_indexes")})
-diff --git tensorfold/vision/qwen_processing.py tensorfold/vision/qwen_processing.py
-index bf6b605..a6000c5 100644
---- tensorfold/vision/qwen_processing.py
-+++ tensorfold/vision/qwen_processing.py
-@@ -135,20 +135,25 @@ class QwenImageProcessor:
-         processor = ImageProcessor(**_processor_options(path, config["vision_config"]))
-         return cls(config, processor, tokenizer)
- 
--    def prepare(self, rendered_prompt: str, images: Sequence[Any], *, max_visual_tokens: int = 4096,
--                max_prompt_tokens: int | None = None) -> PreparedVisionPrompt:
--        """Expand image markers and calculate request-local rotary metadata without touching the GPU."""
--        if not images or max_visual_tokens < 1:
-+    def prepare(self, rendered_prompt: str, images: Sequence[Any], *, videos: Sequence[Any] = (),
-+                max_visual_tokens: int = 4096, max_prompt_tokens: int | None = None) -> PreparedVisionPrompt:
-+        """Expand image (and video) markers and calculate request-local rotary metadata without touching the GPU."""
-+        if (not images and not videos) or max_visual_tokens < 1:
-             raise ValueError("Image preprocessing needs images and a positive visual-token budget")
-         if rendered_prompt.count(self.image_token) != len(images):
-             raise ValueError("The rendered prompt must contain exactly one image marker for each image")
-+        if videos and getattr(self, 'video_token', None) is None:
-+            raise ValueError("this checkpoint's config names no video token")
-+        if videos and rendered_prompt.count(self.video_token) != len(videos):
-+            raise ValueError("The rendered prompt must contain exactly one video marker for each video")
-         if len(images) > max_visual_tokens:
-             raise ValueError("The image count exceeds the visual-token budget")
-         vision = self.config["vision_config"]
-         factor = int(vision["patch_size"]) * int(vision["spatial_merge_size"])
--        limit = max_visual_tokens // len(images)
--        per_image = min(int(getattr(self.processor, "max_pixels", limit * factor**2)), limit * factor**2)
-         parts, grids = [], []
-+        if images:
-+            limit = min(max_visual_tokens // len(images), 4096)
-+            per_image = min(int(getattr(self.processor, "max_pixels", limit * factor**2)), limit * factor**2)
-         for image in images:
-             cap = min(per_image, 256 * factor**2) if getattr(image, "detail", "auto") == "low" else per_image
-             result = self.processor(images=[image.to_pil()], max_pixels=cap,
+
 diff --git tensorfold/vision/videos.py tensorfold/vision/videos.py
-new file mode 100644
-index 0000000..271f7ce
---- /dev/null
+--- tensorfold/vision/videos.py
 +++ tensorfold/vision/videos.py
-@@ -0,0 +1,172 @@
-+"""CPU video inputs: bounded bytes, frames sampled at a fixed rate, decoded straight to the tower's resolution."""
-+
-+from __future__ import annotations
-+
-+import hashlib
-+import io
-+import math
-+import time
-+from dataclasses import dataclass, field
-+from typing import Any, Callable
-+
-+import numpy as np
-+
-+from .images import _data_bytes
-+from .images_http import ImageInputError, fetch_image
-+
-+VIDEO_MEDIA_TYPES = {"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "video/x-matroska": "mkv"}
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class VideoLimits:
-+    max_videos: int = 2
+@@ -20,8 +20,8 @@
+ @dataclass(frozen=True, slots=True)
+ class VideoLimits:
+     max_videos: int = 2
+-    max_encoded_bytes: int = 16 * 1024 * 1024         # base64 makes it a third larger in the 32 MiB request body
+-    max_total_encoded_bytes: int = 20 * 1024 * 1024
 +    max_encoded_bytes: int = 64 * 1024 * 1024
 +    max_total_encoded_bytes: int = 96 * 1024 * 1024
-+    max_dimension: int = 8192
-+    max_seconds: float = 3600.0          # of footage; frames past the sampled ones are decoded and dropped
-+    fps: float = 2.0                      # frames sampled a second (Qwen3-VL's rate)
-+    min_frames: int = 4
-+    max_frames: int = 256                 # a longer video is sampled more sparsely, over its whole length
-+    timeout_seconds: float = 20.0
-+    total_timeout_seconds: float = 120.0
-+    max_redirects: int = 3
-+    max_url_chars: int = 4096
-+
-+
-+DEFAULT_VIDEO_LIMITS = VideoLimits()
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class VideoSource:
-+    url: str
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class VideoInput:
-+    frames: np.ndarray            # [frames, height, width, 3] uint8, already at the tower's resolution
-+    indices: tuple[int, ...]      # each frame's index in the source
-+    fps: float                    # the source's frame rate
-+    content_hash: str = field(init=False)
-+
-+    def __post_init__(self) -> None:
-+        if (not isinstance(self.frames, np.ndarray) or self.frames.dtype != np.uint8 or self.frames.ndim != 4
-+                or self.frames.shape[-1] != 3 or len(self.indices) != self.frames.shape[0] or not self.indices
-+                or not math.isfinite(self.fps) or self.fps <= 0):
-+            raise ImageInputError("video input requires RGB frames, one index each and a positive frame rate")
-+        self.frames.setflags(write=False)
-+        digest = hashlib.sha256(b"tensorfold-video-v1\0" + np.asarray(self.frames.shape, dtype=">u4").tobytes())
-+        digest.update(np.asarray(self.indices, dtype=">u8").tobytes())
-+        digest.update(self.frames.tobytes())
-+        object.__setattr__(self, "content_hash", digest.hexdigest())
-+
-+    def timestamps(self, temporal: int) -> list[float]:
-+        """Each group of ``temporal`` frames' time: the mean of its first and last frame (Qwen3-VL's processor)."""
-+        indices = list(self.indices)
-+        if len(indices) % temporal:
-+            indices.extend(indices[-1] for _ in range(temporal - len(indices) % temporal))
-+        seconds = [i / self.fps for i in indices]
-+        return [(seconds[i] + seconds[i + temporal - 1]) / 2 for i in range(0, len(seconds), temporal)]
-+
-+
-+def video_source(value: Any, limits: VideoLimits, allow_urls: bool) -> VideoSource:
-+    if not isinstance(value, dict) or not isinstance(value.get("url"), str) or not value["url"]:
-+        raise ImageInputError("video_url must contain a non-empty url string")
-+    url = value["url"]
-+    if url.startswith("data:"):
-+        if len(url) > limits.max_encoded_bytes * 3 // 2 + 256:
-+            raise ImageInputError("video data URL exceeds the encoded byte limit")
-+    elif not url.startswith("https://"):
-+        raise ImageInputError("videos require data URLs or public HTTPS URLs")
-+    elif not allow_urls:
-+        raise ImageInputError("video URLs are off on this server; send the video as a data URL, or start the server "
-+                              "with --vision-urls")
-+    elif len(url) > limits.max_url_chars:
-+        raise ImageInputError("video URL is too long")
-+    return VideoSource(url)
-+
-+
-+def _av():
-+    try:
-+        import av
-+    except ImportError:
-+        raise ImageInputError("video inputs require PyAV (pip install av)") from None
-+    return av
-+
-+
-+def sample_indices(total: int, fps: float, limits: VideoLimits) -> np.ndarray:
-+    """Qwen3-VL's frame choice: ``limits.fps`` frames a second (at least min_frames, at most max_frames) spread
-+    evenly over the whole video."""
-+    count = int(total / fps * limits.fps)
-+    count = min(max(count, limits.min_frames), limits.max_frames, total)
-+    return np.linspace(0, total - 1, count).round().astype(int)
-+
-+
-+def decode_video(data: bytes, size: Callable[[int, int, int], tuple[int, int]], limits: VideoLimits,
-+                 deadline: float) -> VideoInput:
-+    """Decode the sampled frames of one video, each scaled to ``size(frames, height, width)`` (bicubic)."""
-+    av = _av()
-+    try:
-+        with av.open(io.BytesIO(data), mode="r") as container:
-+            if not container.streams.video:
-+                raise ImageInputError("the video has no video stream")
-+            stream = container.streams.video[0]
-+            stream.thread_type = "AUTO"
-+            width, height = int(stream.codec_context.width or 0), int(stream.codec_context.height or 0)
-+            if min(width, height) <= 0 or max(width, height) > limits.max_dimension:
-+                raise ImageInputError("video dimensions are missing or exceed the pixel limit")
-+            rate = stream.average_rate or stream.guessed_rate or 24
-+            fps = float(rate)
-+            seconds = float(stream.duration * stream.time_base) if stream.duration else (
-+                container.duration / 1e6 if container.duration else 0.0)
-+            total = int(stream.frames or round(seconds * fps))
-+            if not 0 < fps <= 1000 or total <= 0:
-+                raise ImageInputError("the video's frame count or rate is missing")
-+            if total / fps > limits.max_seconds:
-+                raise ImageInputError(f"videos are limited to {limits.max_seconds / 60:.0f} minutes")
-+            wanted = sample_indices(total, fps, limits)
-+            out_h, out_w = size(len(wanted), height, width)
-+            keep = set(int(i) for i in wanted)
-+            frames, indices = [], []
-+            for n, frame in enumerate(container.decode(stream)):
-+                if n > wanted[-1] or time.monotonic() >= deadline:
-+                    break
-+                if n in keep:
-+                    frames.append(frame.to_ndarray(format="rgb24", width=out_w, height=out_h,
-+                                                   interpolation="BICUBIC"))
-+                    indices.append(n)
-+            if time.monotonic() >= deadline:
-+                raise ImageInputError("video decoding exceeds the time limit")
-+    except ImageInputError:
-+        raise
-+    except (OSError, ValueError, MemoryError) as exc:
-+        raise ImageInputError(f"video bytes are invalid or unsupported ({type(exc).__name__}); use MP4 or "
-+                              "WebM") from None
-+    if len(frames) < 2:
-+        raise ImageInputError("the video has fewer than two decodable frames")
-+    return VideoInput(np.stack(frames), tuple(indices), fps)
-+
-+
-+def load_videos(sources: list[VideoSource], size: Callable[[int, int, int], tuple[int, int]], *,
-+                limits: VideoLimits = DEFAULT_VIDEO_LIMITS, allow_urls: bool = False) -> list[VideoInput]:
-+    """Bound encoded bytes and decoding time across the videos of one request."""
-+    if len(sources) > limits.max_videos:
-+        raise ImageInputError(f"a request supports at most {limits.max_videos} videos")
-+    total = 0
-+    deadline = time.monotonic() + limits.total_timeout_seconds
-+    output = []
-+    for source in sources:
-+        remaining = min(limits.max_encoded_bytes, limits.max_total_encoded_bytes - total)
-+        if remaining <= 0 or time.monotonic() >= deadline:
-+            raise ImageInputError("video request exceeds the total byte or time limit")
-+        if source.url.startswith("data:"):
-+            data = _data_bytes(source.url, remaining)
-+        elif allow_urls:
-+            data, _ = fetch_image(source.url, max_bytes=remaining,
-+                                  deadline=min(deadline, time.monotonic() + limits.timeout_seconds),
-+                                  max_redirects=limits.max_redirects, max_url_chars=limits.max_url_chars,
-+                                  media_types=VIDEO_MEDIA_TYPES)
-+        else:
-+            raise ImageInputError("video URLs are off on this server")
-+        total += len(data)
-+        output.append(decode_video(data, size, limits, deadline))
-+    return output
+     max_dimension: int = 8192
+     max_seconds: float = 3600.0          # of footage; frames past the sampled ones are decoded and dropped
+     fps: float = 2.0                      # frames sampled a second (Qwen3-VL's rate)
+
+diff --git tensorfold/cuda/server.py tensorfold/cuda/server.py
+--- tensorfold/cuda/server.py
++++ tensorfold/cuda/server.py
+@@ -78,7 +78,10 @@
+         self.engine = engine
+         self.vision = getattr(engine, "vision", None)
+         self.image_limits = DEFAULT_LIMITS if vision_max_images is None and vision_image_tokens is None else \
+-            ImageLimits(**({} if vision_max_images is None else {"max_images": vision_max_images}),
++            ImageLimits(**({} if vision_max_images is None else {
++                            "max_images": vision_max_images, "max_total_encoded_bytes": 64 * 1024 * 1024,
++                            "max_total_pixels": max(32 * 1024 * 1024, vision_max_images * 8 * 1024 * 1024),
++                            "total_timeout_seconds": 60.0}),
+                         **({} if vision_image_tokens is None else {"max_visual_tokens": vision_image_tokens}))
+         self.served = served
+         self.aliases = tuple(str(alias).strip() for alias in aliases if str(alias).strip())
+

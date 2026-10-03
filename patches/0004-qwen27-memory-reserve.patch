@@ -1,12 +1,12 @@
-Qwen3.8-27B on TensorFold v0.6.2 (56e2e3e): allow TENSORFOLD_MEMORY_RESERVE_GIB=0 (the server default is 2).
+Qwen3.8-27B on TensorFold v0.6.3 (9356df5): allow TENSORFOLD_MEMORY_RESERVE_GIB=0 (the server default is 2).
 Setting it to 0 leaves nothing out of MemAvailable at startup admission, so a pinned cache pool or stream memory gate
 can take all available memory without startup refusal. Applies after 0003.
 
+
 diff --git tensorfold/cuda/capacity.py tensorfold/cuda/capacity.py
-index 8bb309b..3c95eff 100644
 --- tensorfold/cuda/capacity.py
 +++ tensorfold/cuda/capacity.py
-@@ -166,8 +166,8 @@ def reserve_bytes(total: int, *, host: bool = False) -> int:
+@@ -167,8 +167,8 @@
          gib = float(value)
      except ValueError:
          gib = math.nan
@@ -17,8 +17,8 @@ index 8bb309b..3c95eff 100644
      return int(gib * GIB)
  
  
+
 diff --git tensorfold/families/qwen3_5/cuda/multi.py tensorfold/families/qwen3_5/cuda/multi.py
-index 28f777b..916e21a 100644
 --- tensorfold/families/qwen3_5/cuda/multi.py
 +++ tensorfold/families/qwen3_5/cuda/multi.py
 @@ -2,6 +2,7 @@
@@ -29,7 +29,7 @@ index 28f777b..916e21a 100644
  import time
  
  import torch
-@@ -122,7 +123,9 @@ class MultiDecoder:
+@@ -122,7 +123,9 @@
          c, att = w.config, sum(1 for layer in getattr(w, "layers", ()) if not layer.linear)
          self.layer_bytes = 2 * getattr(c, "kv_heads", 0) * getattr(c, "head_dim", 0) * kv_fp8.itemsize()
          self.row_bytes = att * self.layer_bytes
@@ -40,3 +40,4 @@ index 28f777b..916e21a 100644
                       if world == 1 and cuda else None)
  
      def live(self) -> int:
+

@@ -13,7 +13,7 @@
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
 **10 concurrent requests**, a **pinned 80 GiB KV pool (2,621,440 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, and **up to 50 images and video input**. It runs
-[TensorFold](https://github.com/ashhart/TensorFold) v0.6.2 (`56e2e3e`) in NVIDIA's PyTorch container, plus five patches
+[TensorFold](https://github.com/ashhart/TensorFold) v0.6.3 (`9356df5`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
 cache, on by default; `0004`: a memory reserve of 0; `0005`: an 80 GiB pinned KV pool and 8-slot prompt prefix cache).
 
@@ -211,8 +211,8 @@ A video is a `video_url` part (`{"type": "video_url", "video_url": {"url": "data
 | | Images | Videos |
 | --- | --- | --- |
 | Formats | JPEG, PNG, WebP | MP4, WebM, MOV, MKV (anything FFmpeg decodes) |
-| Per request | up to 50 (`TENSORFOLD_MAX_IMAGES`; all of a chat's turns count), 10 MB each, 64 MB in all | up to 2, 64 MB each, 96 MB in all, up to an hour of footage |
-| Tokens | up to 16,384 for all images (`TENSORFOLD_IMAGE_TOKENS`), at most 4,096 an image (50 images: ~327 each; `"detail": "low"`: 256 an image) | 2 frames a second (at most 256 frames, spread over the whole video), each pair of frames one timestamped block; up to 16,384 tokens a request (`TENSORFOLD_VIDEO_TOKENS`) |
+| Per request | up to 50 (`VISION_MAX_IMAGES`; all of a chat's turns count), 10 MB each, 64 MB in all | up to 2, 64 MB each, 96 MB in all, up to an hour of footage |
+| Tokens | up to 16,384 for all images (`VISION_IMAGE_TOKENS`), at most 4,096 an image (50 images: ~327 each; `"detail": "low"`: 256 an image) | 2 frames a second (at most 256 frames, spread over the whole video), each pair of frames one timestamped block; up to 16,384 tokens a request (`TENSORFOLD_VIDEO_TOKENS`) |
 
 By default only data URLs are accepted; `VISION_URLS=1` also lets the server fetch public `https://` URLs. A request
 body can be up to 96 MiB (base64 makes data URLs a third larger than the files). Image and video prompts are not
@@ -257,7 +257,7 @@ cd qwen3.8-27b-tensorfold-spark
 ./start.sh
 ```
 
-The first run pulls the prebuilt image (`ghcr.io/miaai-lab/qwen3.8-27b-dgx-spark-tensorfold:v0.6.2-<patches hash>`, if the
+The first run pulls the prebuilt image (`ghcr.io/miaai-lab/qwen3.8-27b-dgx-spark-tensorfold:v0.6.3-<patches hash>`, if the
 package is reachable with your Docker login; else it builds it locally, a few minutes) and downloads the checkpoints, then
 compiles the CUDA kernels (a few minutes, once).
 Later starts take about a minute. `start.sh` runs a smoke test and prints the endpoint.
@@ -292,7 +292,7 @@ Every setting is in [`scripts/config.sh`](scripts/config.sh); override from the 
 | `KV_DTYPE` | `fp8` | attention cache: `fp8` (e4m3, 32 KiB a token) or `bf16` (64 KiB) ([above](#fp8-kv-cache)) |
 | `PREFILL_FP8` | `1` | FP8 prompt activations: faster prefill, lower prompt precision; `0` for bf16 |
 | `VISION` / `VISION_URLS` | `1` / `0` | image and video input (MLX checkpoint only) / also fetch `https://` URLs |
-| `TENSORFOLD_MAX_IMAGES` / `TENSORFOLD_IMAGE_TOKENS` | `50` / `16384` | images a request may carry and the tokens they share, each at most 4,096 |
+| `VISION_MAX_IMAGES` / `VISION_IMAGE_TOKENS` | `50` / `16384` | images a request may carry and the tokens they share, each at most 4,096 (passed as `--vision-max-images` / `--vision-image-tokens`) |
 | `TENSORFOLD_VIDEO_TOKENS` | `16384` | a request's video token budget |
 | `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `0.95` / `20` | default sampling (Qwen's thinking-mode values) |
 | `THINKING` | `1` | open a think block by default |
@@ -321,7 +321,7 @@ LICENSE, NOTICE, LICENSES/, CREDITS.md   Apache-2.0 license, notices of the MIT 
 
 ## License
 
-Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The patches modify TensorFold v0.6.2, which is
+Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The patches modify TensorFold v0.6.3, which is
 Apache-2.0. Parts of the scripts and tools are adapted from MiaAI-Lab's MIT-licensed Flash Next recipe and keep its
 notice ([`LICENSES/MIT-MiaAI-Lab.txt`](LICENSES/MIT-MiaAI-Lab.txt)); TensorFold's pre-0.6.0 MIT notice is in
 `LICENSES/` too. The model weights, downloaded from Hugging Face and not part of this repository, are under the Qwen
@@ -331,7 +331,7 @@ It also contains Hugging Face `transformers` (Apache 2.0) and PyAV (BSD) with it
 
 ## Credits
 
-Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart (v0.6.2), [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
+Built on [TensorFold](https://github.com/ashhart/TensorFold) by Ash Hart (v0.6.3), [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 by Qwen, [Vontra's MLX 4-bit checkpoint](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) and
 [z-lab's DFlash2 drafter](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2), with the launcher, tools and the video code
 adapted from MiaAI-Lab's Flash Next recipe. The full list, including the YaRN source, the runtime stack and licenses,
