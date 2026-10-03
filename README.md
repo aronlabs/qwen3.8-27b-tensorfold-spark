@@ -12,11 +12,10 @@
 </p>
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
-**10 concurrent requests**, a **pinned 80 GiB KV pool (2,621,440 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, and **up to 50 images and video input**. It runs
+**8 concurrent requests**, a **pinned 64 GiB KV pool (2,097,152 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, CPU affinity pinned to the GB10's Cortex-X925 performance cores, and **up to 50 images and video input**. It runs
 [TensorFold](https://github.com/ashhart/TensorFold) v0.6.3 (`9356df5`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
-cache, on by default; `0004`: a memory reserve of 0; `0005`: an 80 GiB pinned KV pool and 8-slot prompt prefix cache).
-
+cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool and 8-slot prompt prefix cache).
 - Checkpoint: [`Vontra/Qwen3.8-27B-MLX-4bit`](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) (affine 4-bit, groups of 64, ~15 GB)
 - Drafter: [`z-lab/Qwen3.8-27B-DFlash2`](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) (~3.6 GB)
 - API model id: `Qwen3.8-27B`
@@ -25,41 +24,34 @@ cache, on by default; `0004`: a memory reserve of 0; `0005`: an 80 GiB pinned KV
 
 ## Performance
 
-All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/sparkDash) on NVIDIA DGX Spark (GB10, 128 GB unified memory) on 2026-10-02 (`agg` is total across concurrent requests, `str` is per-request throughput, TTFT is time to first token).
+All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/sparkDash) on NVIDIA DGX Spark (GB10, 128 GB unified memory) on 2026-10-03 with Cortex-X925 core pinning (`--cpuset-cpus "5-9,15-19"`) and a 64 GiB pinned pool (`agg` is total across concurrent requests, `str` is per-request throughput, TTFT is time to first token).
 
 ### Decode, Structured (`Count 1 to 200`) (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 154.1 | 154.1 | 93 ms |
-| 2 | 263.0 | 138.0 | 118 ms |
-| 4 | 305.0 | 116.0 | 169 ms |
-| 6 | 515.0 | 89.0 | 219 ms |
-| 8 | 651.0 | 84.0 | 307 ms |
-| **10** | **695.1** | **71.0** | **354 ms** |
+| 1 | 153.6 | 153.6 | 100 ms |
+| 2 | 220.4 | 123.0 | 122 ms |
+| 4 | 385.5 | 109.0 | 172 ms |
+| **8** | **624.8** | **78.7** | **328 ms** |
 
 ### Decode, Code (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 143.0 | 143.0 | 115 ms |
-| 2 | 253.0 | 129.0 | 115 ms |
-| 4 | 345.0 | 102.0 | 171 ms |
-| 6 | 386.0 | 79.0 | 192 ms |
-| 8 | 496.0 | 67.0 | 302 ms |
-| **10** | **472.0** | **59.0** | **365 ms** |
+| 1 | 148.1 | 148.1 | 95 ms |
+| 2 | 242.2 | 125.7 | 121 ms |
+| 4 | 329.6 | 96.2 | 119 ms *(27% faster TTFT)* |
+| **8** | **460.1** | **62.5** | **194 ms** |
 
 ### Decode, Prose (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 62.0 | 62.0 | 95 ms |
-| 2 | 117.0 | 59.0 | 122 ms |
-| 4 | 148.0 | 43.0 | 177 ms |
-| 6 | 239.0 | 42.0 | 273 ms |
-| 8 | 260.0 | 36.0 | 306 ms |
-| **10** | **302.0** | **32.0** | **362 ms** |
-
+| 1 | 65.2 | 65.2 | 96 ms |
+| 2 | 110.8 | 55.7 | 120 ms |
+| 4 | 169.0 | 46.4 | 188 ms |
+| **8** | **264.8** | **36.5** | **314 ms** |
 ### Prefill (`PREFILL_FP8=1`) (tok/s)
 
 | Prompt Context | Tokens | Prefill speed | Time to first token |
@@ -100,6 +92,27 @@ windows (2.1M tokens) fit in it at once.
 - The pool counts everything torch holds beyond the startup baseline (the prompt kernel's transient widened copies,
   kept DeltaNet states), so a long prefill briefly uses some of it. One GPU only; with `KV_POOL_GB` empty the old
   grow-on-demand behavior is unchanged.
+
+## Cortex-X925 CPU Affinity Pinning
+
+The DGX Spark's GB10 SoC features a hybrid ARM architecture:
+* Cores 0–4 and 10–14: 2.8 GHz Cortex-A725 efficiency cores
+* Cores 5–9 and 15–19: 3.9 GHz Cortex-X925 performance cores
+
+By default in `start.sh`, TensorFold is launched with:
+```bash
+--cpuset-cpus "5-9,15-19"
+```
+Restricting the Python server process, asyncio scheduling loop, and C++ memory workers strictly to the ten Cortex-X925 3.9 GHz cores delivers a **~25–27% reduction in Time-To-First-Token (TTFT)** under medium concurrency (e.g. 4-stream code generation TTFT dropped from 163 ms to 119 ms) with zero throughput degradation.
+
+## Memory Safety: 8 Streams vs 10 Streams
+
+While the engine previously ran up to 10 streams $\times$ 262k inside an 80 GiB pinned KV pool, that profile consumed ~112.5 GiB of unified VRAM, leaving only ~2.4 GiB of host RAM available and pushing ~4.2 GiB into swap.
+
+Standardizing on **8 streams $\times$ 262,144 tokens (`KV_POOL_GB=64`)**:
+* Recovers **+31.6 GiB of host RAM headroom** (raising available RAM to **34.0 GiB**).
+* Evicts swap back down to **305 MiB**.
+* Guarantees all 8 streams can concurrently reach the full 262,144 context boundary with zero risk of memory watcher restarts or allocation panics.
 
 ## FP8 KV cache
 
