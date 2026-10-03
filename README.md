@@ -13,7 +13,7 @@
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
 **8 concurrent requests**, a **pinned 64 GiB KV pool (2,097,152 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, CPU affinity pinned to the GB10's Cortex-X925 performance cores, and **up to 50 images and video input**. It runs
-[TensorFold](https://github.com/ashhart/TensorFold) v0.6.3 (`9356df5`) in NVIDIA's PyTorch container, plus five patches
+[TensorFold](https://github.com/ashhart/TensorFold) v0.6.5 (`609ca41`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
 cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool and 8-slot prompt prefix cache).
 - Checkpoint: [`Vontra/Qwen3.8-27B-MLX-4bit`](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) (affine 4-bit, groups of 64, ~15 GB)
@@ -24,34 +24,43 @@ cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool an
 
 ## Performance
 
-All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/sparkDash) on NVIDIA DGX Spark (GB10, 128 GB unified memory) on 2026-10-03 with Cortex-X925 core pinning (`--cpuset-cpus "5-9,15-19"`) and a 64 GiB pinned pool (`agg` is total across concurrent requests, `str` is per-request throughput, TTFT is time to first token).
+All figures verified directly via [sparkDash](https://github.com/MiaAI-Lab/sparkDash) on NVIDIA DGX Spark (GB10, 128 GB unified memory) on 2026-10-03 running **TensorFold v0.6.5** with Cortex-X925 core pinning (`--cpuset-cpus "5-9,15-19"`) and a 64 GiB pinned pool (`agg` is total across concurrent requests, `str` is per-request throughput, TTFT is time to first token).
 
 ### Decode, Structured (`Count 1 to 200`) (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 153.6 | 153.6 | 100 ms |
-| 2 | 220.4 | 123.0 | 122 ms |
-| 4 | 385.5 | 109.0 | 172 ms |
-| **8** | **624.8** | **78.7** | **328 ms** |
+| 1 | 149.2 | 149.2 | 93 ms |
+| 2 | 220.5 | 122.9 | 121 ms |
+| 3 | 200.9 | 81.8 | 137 ms |
+| 4 | 388.6 | 109.9 | 172 ms |
+| 5 | 460.8 | 92.2 | 196 ms |
+| 6 | 522.0 | 88.9 | 211 ms |
+| **8** | **635.1** | **80.0** | **303 ms** |
 
 ### Decode, Code (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 148.1 | 148.1 | 95 ms |
-| 2 | 242.2 | 125.7 | 121 ms |
-| 4 | 329.6 | 96.2 | 119 ms *(27% faster TTFT)* |
-| **8** | **460.1** | **62.5** | **194 ms** |
+| 1 | 148.1 | 148.1 | 112 ms |
+| 2 | 240.5 | 124.7 | 117 ms |
+| 3 | 308.5 | 107.7 | 124 ms |
+| 4 | 332.6 | 96.5 | 132 ms |
+| 5 | 365.2 | 82.5 | 138 ms |
+| 6 | 383.0 | 74.5 | 147 ms |
+| **8** | **463.2** | **63.9** | **192 ms** |
 
 ### Decode, Prose (tok/s)
 
 | Concurrent requests | Aggregate | Per request | Time to first token |
 | ---: | ---: | ---: | ---: |
-| 1 | 65.2 | 65.2 | 96 ms |
-| 2 | 110.8 | 55.7 | 120 ms |
-| 4 | 169.0 | 46.4 | 188 ms |
-| **8** | **264.8** | **36.5** | **314 ms** |
+| 1 | 65.5 | 65.5 | 101 ms |
+| 2 | 110.7 | 55.7 | 120 ms |
+| 3 | 143.8 | 50.2 | 155 ms |
+| 4 | 168.1 | 46.1 | 173 ms |
+| 5 | 203.9 | 43.5 | 188 ms |
+| 6 | 238.9 | 40.9 | 271 ms |
+| **8** | **264.1** | **36.4** | **310 ms** |
 ### Prefill (`PREFILL_FP8=1`) (tok/s)
 
 | Prompt Context | Tokens | Prefill speed | Time to first token |
