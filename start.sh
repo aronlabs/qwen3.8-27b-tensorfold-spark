@@ -153,6 +153,7 @@ log "tensorfold serve $MODEL_ID --host $HOST --port $PORT ${SERVE_ARGS[*]}"
 # HF_HUB_OFFLINE=0 huggingface_hub finds the token file in the mounted cache.
 docker run -d --name "$CONTAINER_NAME" \
   --gpus all --ipc=host --network host \
+  --cpuset-cpus "5-9,15-19" \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   -e HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "${ENV_ARGS[@]}" \
   -v "$HF_CACHE":/root/.cache/huggingface \

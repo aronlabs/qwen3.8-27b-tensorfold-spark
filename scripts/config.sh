@@ -33,7 +33,7 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8888}"
 
 # Serving defaults (./start.sh arguments come after them and win).
-PARALLEL="${PARALLEL:-10}"         # requests decoded together (streams); 1 serves one at a time
+PARALLEL="${PARALLEL:-8}"         # requests decoded together (streams); 1 serves one at a time
 # YaRN (patches/0002, opt-in): YARN_FACTOR=4 stretches the 262,144-token native window 4x (1,048,576 tokens). It rescales
 # the rotary frequencies of the 16 attention layers, so it can cost a little quality at short range; leave it empty
 # unless you need the length. A bigger window also needs memory: 64 KiB of KV a token (16 GiB per 262k tokens).
@@ -75,7 +75,7 @@ export TENSORFOLD_KV_DTYPE="$KV_DTYPE"
 # prompt state; the caches grow inside it, nothing is given back, and a request that does not fit waits. 32 KiB a
 # token with the FP8 cache, so 80 GiB is 2,621,440 tokens (guaranteeing 10 streams at full 262,144 tokens).
 # A number sets it; 0 or empty: no pin, caches grow on demand. "auto" sizes it from free memory.
-KV_POOL_GB="${KV_POOL_GB:-80}"
+KV_POOL_GB="${KV_POOL_GB:-64}"
 [[ "$KV_POOL_GB" == auto || -z "$KV_POOL_GB" || "$KV_POOL_GB" == 0 ]] || export TENSORFOLD_KV_POOL_GIB="$KV_POOL_GB"
 
 # Startup reserve: GiB left out of MemAvailable at admission and kept free by the stream memory gate. TensorFold's own
