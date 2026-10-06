@@ -13,7 +13,7 @@
 
 Serve **Qwen3.8-27B** from a single NVIDIA DGX Spark (GB10, 128 GB) through an OpenAI-compatible API, with up to
 **8 concurrent requests**, a **pinned 64 GiB KV pool (2,097,152 tokens)** guaranteeing the full **262,144-token context** simultaneously across all streams, DFlash2 speculative decoding, CPU affinity pinned to the GB10's Cortex-X925 performance cores, and **up to 50 images and video input**. It runs
-[TensorFold](https://github.com/ashhart/TensorFold) v0.6.5 (`609ca41`) in NVIDIA's PyTorch container, plus five patches
+[TensorFold](https://github.com/ashhart/TensorFold) v0.6.6 (`cb2ebf0`) in NVIDIA's PyTorch container, plus five patches
 (`0001`: up to 50 images and video input; `0002`: opt-in YaRN, up to a 1,048,576-token window; `0003`: FP8 attention
 cache, on by default; `0004`: a memory reserve of 0; `0005`: a pinned KV pool and 8-slot prompt prefix cache).
 - Checkpoint: [`Vontra/Qwen3.8-27B-MLX-4bit`](https://huggingface.co/Vontra/Qwen3.8-27B-MLX-4bit) (affine 4-bit, groups of 64, ~15 GB)
@@ -78,6 +78,30 @@ Longer prompts, measured here with a needle-in-a-haystack prompt on the default 
 sparkDash, so the decode figures are lower and not comparable one to one): per request 48.6 tok/s alone, aggregate 93 / 136 / 150 tok/s at
 2 / 4 / 8 clients; prefill 1,862 tok/s at 8k, 1,663 at 31k, 1,147 at 126k. `PARALLEL=16` reached 207 tok/s at 16
 clients. A single request decodes the same at every `PARALLEL`.
+
+### TensorFold v0.6.6 (2026-10-06)
+
+v0.6.6 changes one thing over v0.6.5: the opt-in `--name-priority ID=background` flag. The five patches apply unchanged (same patch hash) and `scripts/config.sh` now defaults to `TF_VERSION=v0.6.6`. Re-measured on the same Spark with [`ab-bench`](https://bench.gummie.dev) (temperature 0, thinking off, 400 tokens, one cold round discarded, then 3 timed rounds; idle server; 8 streams; started with a plain `./start.sh`, no extra flags). Aggregate decode tok/s, v0.6.5 -> v0.6.6:
+
+| Prompt | x1 | x2 | x3 | x4 | x5 | x6 | x7 | x8 |
+|---|---|---|---|---|---|---|---|---|
+| structured | 153 -> 151 | 278 -> 272 | 362 -> 361 | 458 -> 459 | 491 -> 493 | 537 -> 528 | 575 -> 565 | 627 -> 632 |
+| prose | 65 -> 65 | 114 -> 115 | 153 -> 158 | 192 -> 191 | 228 -> 229 | 251 -> 251 | 276 -> 272 | 292 -> 288 |
+| code | 147 -> 148 | 238 -> 242 | 300 -> 307 | 330 -> 331 | 366 -> 369 | 389 -> 375 | 404 -> 401 | 469 -> 465 |
+| json | 113 -> 113 | 203 -> 203 | 266 -> 266 | 324 -> 331 | 349 -> 353 | 387 -> 387 | 396 -> 392 | 442 -> 445 |
+
+| Prefill | v0.6.5 | v0.6.6 |
+|---|---|---|
+| 1K | 1634 tok/s, 0.63 s | 1609 tok/s, 0.64 s |
+| 2K | 1858 tok/s, 1.09 s | 1872 tok/s, 1.09 s |
+| 4K | 1958 tok/s, 2.06 s | 1945 tok/s, 2.08 s |
+| 8K | 1970 tok/s, 4.10 s | 1967 tok/s, 4.11 s |
+| 16K | 1908 tok/s, 8.46 s | 1903 tok/s, 8.48 s |
+| 32K | 1757 tok/s, 18.37 s | 1753 tok/s, 18.41 s |
+
+There is no clear change: the 32 decode cells range from -3.6% to +3.6% (median 0.0%), prefill is within 1.5%. These `ab-bench` figures use a different harness from the sparkDash tables above (the decode figures are not comparable one to one). Per-round data and CSV exports are in the archive at [bench.gummie.dev](https://bench.gummie.dev).
+
+**`--name-priority` is not worth running on the 27B.** It works: with `--alias Qwen3.8-27B-bg --name-priority Qwen3.8-27B-bg=background` and all 8 streams busy, a short foreground request got its first token in 0.21 s instead of 26.4 s (median of 3 repetitions). But a wave of requests sent to the background id measured **lower aggregate decode** than the same server without the flags: 4-7% lower at 2 streams, growing to 8-19% lower at 8 streams (at x8: structured -19%, json -16%, code -13%, prose -8%), and two alternating re-runs of structured and json at x5-x8 agreed within 1 tok/s between repeats, so it is not noise. x1 and prefill are unaffected, and steady per-stream decode barely moves (7.6 against 7.9 chunks/s). The likely cause, not verified: the engine fills background prompts one at a time in small slices instead of batching them like foreground prompts, so a wave of background requests starts staggered. So this recipe serves one model id and does not set the flag; if you add it anyway (`./start.sh restart --alias Qwen3.8-27B-bg --name-priority Qwen3.8-27B-bg=background`), expect that throughput cost. [Flash-Next](https://github.com/aronlabs/qwen3.8-flash-next-tensorfold-spark) showed no such cost with the same flag.
 
 ## Pinned KV pool
 
@@ -303,7 +327,7 @@ The model thinks before it answers (`reasoning_content`), so give replies enough
 ## Configuration
 
 Every setting is in [`scripts/config.sh`](scripts/config.sh); override from the environment, a `.env` file next to
-`start.sh`, or `tensorfold serve` flags after `start.sh` (`./start.sh restart --context 131072`).
+`start.sh`, or `tensorfold serve` flags after `start.sh` (`./start.sh restart --context 131072`). TensorFold's `--alias` and `--name-priority` also go there but are not recommended on this model, see [v0.6.6](#tensorfold-v066-2026-10-06).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

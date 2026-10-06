@@ -17,9 +17,9 @@ fi
 # The target and its DFlash2 drafter (CUDA serves the 27B with DFlash2 unless --no-drafts is given).
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-27B-MLX-4bit}"           # MLX affine 4-bit, groups of 64 (~15 GB)
 DRAFT_ID="${DRAFT_ID:-z-lab/Qwen3.8-27B-DFlash2}"             # the drafter (~3.6 GB); "" serves without drafts
-# The patches (if any) and start.sh's flags are made for TensorFold v0.6.3 (9356df5). After changing
-# TF_VERSION, TF_REPO or BASE_IMAGE, run `scripts/prepare.sh --rebuild`.
-TF_VERSION="${TF_VERSION:-v0.6.5}"
+# The patches (if any) and start.sh's flags are made for TensorFold v0.6.3 (9356df5); v0.6.6 (cb2ebf0) takes them
+# unchanged. After changing TF_VERSION, TF_REPO or BASE_IMAGE, run `scripts/prepare.sh --rebuild`.
+TF_VERSION="${TF_VERSION:-v0.6.6}"
 TF_REPO="${TF_REPO:-https://github.com/ashhart/TensorFold.git}"
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
 IMAGE="${IMAGE:-tensorfold-qwen38-27b:${TF_VERSION}}"          # the local image prepare.sh builds
